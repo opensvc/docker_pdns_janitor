@@ -1,0 +1,184 @@
+#!/usr/bin/python3
+
+from __future__ import print_function
+
+import os
+import sys
+import json
+import socket
+import tempfile
+import contextlib
+import select
+
+def bdecode(buff):
+    """
+    On python, convert bytes to string using utf-8 and ascii as a fallback
+    """
+    if buff is None:
+        return buff
+    if sys.version_info[0] < 3:
+        return buff
+    if type(buff) == str:
+        return buff
+    else:
+        try:
+            return str(buff, "utf-8")
+        except:
+            return str(buff, "ascii")
+    return buff
+
+def msg_encode(data):
+    return (json.dumps(data)+'\0').encode()
+
+def msg_decode(message):
+    message = bdecode(message).rstrip("\0\x00")
+    if len(message) == 0:
+        return
+    return json.loads(message)
+
+
+class PdnsJanitor(object):
+    @contextlib.contextmanager
+    def lsnr_socket(self):
+        if "OPENSVC_LSNR_SOCK" in os.environ:
+            lsnr_path = os.environ["OPENSVC_LSNR_SOCK"]
+        else:
+            lsnr_path = "/var/run/lsnr/lsnr.sock"
+
+        try:
+            lsnr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            lsnr.settimeout(0.3)
+            lsnr.connect(lsnr_path)
+            yield lsnr
+        finally:
+            lsnr.close()
+
+    @contextlib.contextmanager
+    def recursor_socket(self):
+        if "OPENSVC_RECURSOR_SOCK" in os.environ:
+            recursor_path = os.environ["OPENSVC_RECURSOR_SOCK"]
+        else:
+            recursor_path = "/var/run/pdns_recursor.controlsocket"
+        recursor_dir = os.path.dirname(recursor_path)
+        tmpf = tempfile.NamedTemporaryFile(dir=recursor_dir)
+        fname = tmpf.name
+        tmpf.close()
+
+        try:
+             recursor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+             recursor.bind(fname)
+             recursor.connect(recursor_path)
+             yield recursor
+        finally:
+             os.unlink(fname)
+
+    def wipe(self, domain):
+        with self.recursor_socket() as recursor:
+            msg = "wipe-cache %s" % domain
+            print(msg)
+            msg = (msg+"\n").encode()
+            recursor.sendall(msg)
+            recursor.settimeout(0.2)
+            try:
+                data = recursor.recv(512)
+                print(data.decode())
+            except socket.timeout:
+                print("no response from recursor")
+
+    def event_router(self, data):
+        if data is None:
+            return
+        changes = data.get("data", {})
+        wipe = False
+        for change in changes:
+            change_len = len(change)
+            if change_len == 2:
+                # change
+                # ex: [['services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
+                # ex: [['services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
+                key, val = change
+                if len(key) == 6 and \
+                   key[0] == "services" and \
+                   key[1] == "status" and \
+                   key[3] == "resources" and \
+                   key[4].startswith("ip#") and \
+                   key[5] == "status":
+                    svcname = key[2]
+                    print("change instance ip status", svcname, key[-1])
+                    wipe = True
+                if len(key) == 7 and \
+                   key[0] == "services" and \
+                   key[1] == "status" and \
+                   key[3] == "resources" and \
+                   key[4].startswith("ip#") and \
+                   key[5] == "info" and \
+                   key[6] == "ipaddr":
+                    svcname = key[2]
+                    print("change instance ip addr", svcname, key[-1])
+                    wipe = True
+            elif change_len == 1:
+                # delete
+                # ex: [['services', 'status', '3.svcdevops-front']]
+                key = change[0]
+                if len(key) == 3 and \
+                   key[0] == "services" and \
+                   key[1] == "status":
+                    svcname = key[2]
+                    print("delete instance", svcname)
+                    wipe = True
+        if wipe:
+            self.wipe(self.clustername+"$")
+
+    def mainloop(self, lsnr):
+        data = self.recv_message(lsnr)
+        self.event_router(data)
+
+    def recv_message(self, sock):
+        chunks = []
+        while True:
+            try:
+                chunk = sock.recv(1)
+            except socket.timeout:
+                break
+            if chunk:
+                chunks.append(chunk)
+            if not chunk or chunk == b"\x00":
+                break
+        if sys.version_info[0] >= 3:
+            data = b"".join(chunks)
+        else:
+            data = "".join(chunks)
+        if len(data) == 0:
+            return
+        try:
+            data = msg_decode(data)
+        except ValueError:
+            print("invalid event data")
+            return
+        return data
+
+    def init_cluster_data(self):
+        with self.lsnr_socket() as lsnr:
+            lsnr.sendall(msg_encode({"action": "daemon_status"}))
+            data = self.recv_message(lsnr)
+            if data is None:
+                print("unable to get initial cluster data")
+                return
+            self.clustername = data["cluster"]["name"]
+            print("clustername: %s" % self.clustername)
+
+    def main(self):
+        self.init_cluster_data()
+
+        with self.lsnr_socket() as lsnr:
+            lsnr.sendall(msg_encode({"action": "events"}))
+            while True:
+               self.mainloop(lsnr)
+
+if __name__ == "__main__":
+    try:
+        o = PdnsJanitor()
+        o.main()
+    except KeyboardInterrupt:
+        pass
+
