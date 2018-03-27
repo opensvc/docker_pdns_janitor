@@ -9,6 +9,11 @@ import socket
 import tempfile
 import contextlib
 import select
+import time
+import traceback
+
+class LsnrReset(Exception):
+    pass
 
 def bdecode(buff):
     """
@@ -21,10 +26,7 @@ def bdecode(buff):
     if type(buff) == str:
         return buff
     else:
-        try:
-            return str(buff, "utf-8")
-        except:
-            return str(buff, "ascii")
+        return buff.decode("utf-8", errors="ignore")
     return buff
 
 def msg_encode(data):
@@ -45,9 +47,10 @@ class PdnsJanitor(object):
         else:
             lsnr_path = "/var/run/lsnr/lsnr.sock"
 
+        print("init listener socket")
         try:
             lsnr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            lsnr.settimeout(0.3)
+            lsnr.settimeout(1)
             lsnr.connect(lsnr_path)
             yield lsnr
         finally:
@@ -130,37 +133,45 @@ class PdnsJanitor(object):
             self.wipe(self.clustername+"$")
 
     def mainloop(self, lsnr):
-        data = self.recv_message(lsnr)
-        self.event_router(data)
+        messages = self.recv_messages(lsnr, stream=True)
+        for message in messages:
+            self.event_router(message)
 
-    def recv_message(self, sock):
+    def recv_messages(self, sock, stream=False):
+        messages = []
         chunks = []
+        sep = b"\x00"
         while True:
             try:
-                chunk = sock.recv(1)
+                chunk = sock.recv(4096)
             except socket.timeout:
                 break
-            if chunk:
-                chunks.append(chunk)
-            if not chunk or chunk == b"\x00":
+            if stream and chunk == b'':
+                # disconnect
+                raise LsnrReset
+            if not chunk or chunk == sep:
                 break
+            chunks.append(chunk)
+
         if sys.version_info[0] >= 3:
             data = b"".join(chunks)
         else:
             data = "".join(chunks)
         if len(data) == 0:
-            return
-        try:
-            data = msg_decode(data)
-        except ValueError:
-            print("invalid event data")
-            return
-        return data
+            return []
+        for message in data.split(sep):
+            message = msg_decode(message)
+            messages.append(message)
+        return messages
 
     def init_cluster_data(self):
         with self.lsnr_socket() as lsnr:
+            if lsnr is None:
+                print("lsnr socket not ready")
+                time.sleep(1)
+                return
             lsnr.sendall(msg_encode({"action": "daemon_status"}))
-            data = self.recv_message(lsnr)
+            data = self.recv_messages(lsnr)[0]
             if data is None:
                 print("unable to get initial cluster data")
                 return
@@ -168,12 +179,20 @@ class PdnsJanitor(object):
             print("clustername: %s" % self.clustername)
 
     def main(self):
-        self.init_cluster_data()
-
-        with self.lsnr_socket() as lsnr:
-            lsnr.sendall(msg_encode({"action": "events"}))
-            while True:
-               self.mainloop(lsnr)
+        while True:
+            try:
+                self.init_cluster_data()
+                with self.lsnr_socket() as lsnr:
+                    lsnr.sendall(msg_encode({"action": "events"}))
+                    if lsnr is None:
+                        raise Exception("lsnr socket not ready")
+                    while True:
+                        self.mainloop(lsnr)
+            except LsnrReset:
+                time.sleep(1)
+            except Exception:
+                traceback.print_exc()
+                time.sleep(1)
 
 if __name__ == "__main__":
     try:
