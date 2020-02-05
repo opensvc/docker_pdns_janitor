@@ -94,40 +94,51 @@ class PdnsJanitor(object):
         changes = data.get("data", {})
         wipe = False
         for change in changes:
+            try:
+                key = change[0]
+            except IndexError:
+                continue
+            if not key:
+                continue
             change_len = len(change)
             if change_len == 2:
                 # change
-                # ex: [['services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
-                # ex: [['services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
-                key, val = change
-                if len(key) == 6 and \
-                   key[0] == "services" and \
-                   key[1] == "status" and \
-                   key[3] == "resources" and \
-                   key[4].startswith("ip#") and \
-                   key[5] == "status":
-                    svcname = key[2]
-                    print("change instance ip status", svcname, key[-1])
+                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
+                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
+                val = change[1]
+                if len(key) == 9 and \
+                   key[0] == "monitor" and \
+                   key[1] == "nodes" and \
+                   key[3] == "services" and \
+                   key[4] == "status" and \
+                   key[6] == "resources" and \
+                   key[7].startswith("ip#") and \
+                   key[8] == "status":
+                    svcname = key[5]
+                    print("change", key[2], "instance ip status", svcname, key[-1])
                     wipe = True
-                if len(key) == 7 and \
-                   key[0] == "services" and \
-                   key[1] == "status" and \
-                   key[3] == "resources" and \
-                   key[4].startswith("ip#") and \
-                   key[5] == "info" and \
-                   key[6] == "ipaddr":
-                    svcname = key[2]
-                    print("change instance ip addr", svcname, key[-1])
+                if len(key) == 10 and \
+                   key[0] == "monitor" and \
+                   key[1] == "nodes" and \
+                   key[3] == "services" and \
+                   key[4] == "status" and \
+                   key[6] == "resources" and \
+                   key[7].startswith("ip#") and \
+                   key[8] == "info" and \
+                   key[9] == "ipaddr":
+                    svcname = key[5]
+                    print("change", key[2], "instance ip addr", svcname, key[-1])
                     wipe = True
             elif change_len == 1:
                 # delete
-                # ex: [['services', 'status', '3.svcdevops-front']]
-                key = change[0]
-                if len(key) == 3 and \
-                   key[0] == "services" and \
-                   key[1] == "status":
-                    svcname = key[2]
-                    print("delete instance", svcname)
+                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front']]
+                if len(key) == 6 and \
+                   key[0] == "monitor" and \
+                   key[1] == "nodes" and \
+                   key[3] == "services" and \
+                   key[4] == "status":
+                    svcname = key[5]
+                    print("delete", key[2], "instance", svcname)
                     wipe = True
         if wipe:
             self.wipe(self.clustername+"$")
