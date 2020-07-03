@@ -164,7 +164,7 @@ class PdnsJanitor(object):
                 break
             if stream and chunk == b'':
                 # disconnect
-                raise LsnrReset
+                raise LsnrReset('recv stream has no more data (disconnect)')
             if not chunk or chunk == sep:
                 break
             chunks.append(chunk)
