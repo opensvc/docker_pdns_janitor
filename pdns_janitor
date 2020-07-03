@@ -188,8 +188,17 @@ class PdnsJanitor(object):
             data = self.recv_messages(lsnr)[0]
             if data is None:
                 raise LsnrReset("unable to get initial cluster data")
-            self.clustername = data["cluster"]["name"]
-            print("clustername: %s" % self.clustername)
+            try:
+                self.clustername = data["cluster"]["name"]
+                print("clustername: %s" % self.clustername)
+            except KeyError:
+                raise LsnrReset("unable to detect cluster name")
+            try:
+                if data["dns"]["state"] != "running":
+                    raise LsnrReset("dns thread not yet running")
+                print('dns thread running')
+            except KeyError:
+                raise LsnrReset("no dns thread info")
 
     def main(self):
         while True:
