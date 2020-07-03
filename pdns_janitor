@@ -42,6 +42,9 @@ def msg_decode(message):
 
 
 class PdnsJanitor(object):
+    def __init__(self):
+        self.clustername = None
+
     @contextlib.contextmanager
     def lsnr_socket(self):
         if "OPENSVC_LSNR_SOCK" in os.environ:
@@ -50,8 +53,8 @@ class PdnsJanitor(object):
             lsnr_path = "/var/run/lsnr/lsnr.sock"
 
         print("init listener socket")
+        lsnr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            lsnr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             lsnr.settimeout(1)
             lsnr.connect(lsnr_path)
             yield lsnr
@@ -105,9 +108,8 @@ class PdnsJanitor(object):
             change_len = len(change)
             if change_len == 2:
                 # change examples
-                # [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
-                # [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
-                val = change[1]
+                # [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']  # noqa
+                # [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']  # noqa
                 if len(key) == 9 and \
                    key[0] == "monitor" and \
                    key[1] == "nodes" and \
@@ -150,7 +152,8 @@ class PdnsJanitor(object):
         for message in messages:
             self.event_router(message)
 
-    def recv_messages(self, sock, stream=False):
+    @staticmethod
+    def recv_messages(sock, stream=False):
         messages = []
         chunks = []
         sep = b"\x00"
@@ -200,7 +203,7 @@ class PdnsJanitor(object):
                         self.mainloop(lsnr)
             except LsnrReset as error:
                 print(error)
-            except Exception:
+            except Exception:  # noqa
                 traceback.print_exc()
             time.sleep(1)
 
