@@ -213,7 +213,7 @@ class PdnsJanitor(object):
                         self.mainloop(lsnr)
                         if self.last < time.time() - 30:
                             raise LsnrReset("no event received in the last 30s. reset events socket.")
-            except LsnrReset as error:
+            except (LsnrReset, ConnectionRefusedError) as error:
                 print(error)
             except Exception:  # noqa
                 traceback.print_exc()
