@@ -44,6 +44,7 @@ def msg_decode(message):
 class PdnsJanitor(object):
     def __init__(self):
         self.clustername = None
+        self.last = None
 
     @contextlib.contextmanager
     def lsnr_socket(self):
@@ -152,8 +153,7 @@ class PdnsJanitor(object):
         for message in messages:
             self.event_router(message)
 
-    @staticmethod
-    def recv_messages(sock, stream=False):
+    def recv_messages(self, sock, stream=False):
         messages = []
         chunks = []
         sep = b"\x00"
@@ -175,6 +175,7 @@ class PdnsJanitor(object):
             data = "".join(chunks)
         if len(data) == 0:
             return []
+        self.last = time.time()
         for message in data.split(sep):
             message = msg_decode(message)
             messages.append(message)
@@ -210,6 +211,8 @@ class PdnsJanitor(object):
                         raise Exception("lsnr socket not ready")
                     while True:
                         self.mainloop(lsnr)
+                        if self.last < time.time() - 30:
+                            raise LsnrReset("no event received in the last 30s. reset events socket.")
             except LsnrReset as error:
                 print(error)
             except Exception:  # noqa
