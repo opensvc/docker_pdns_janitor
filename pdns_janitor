@@ -8,12 +8,13 @@ import json
 import socket
 import tempfile
 import contextlib
-import select
 import time
 import traceback
 
+
 class LsnrReset(Exception):
     pass
+
 
 def bdecode(buff):
     """
@@ -27,10 +28,11 @@ def bdecode(buff):
         return buff
     else:
         return buff.decode("utf-8", errors="ignore")
-    return buff
+
 
 def msg_encode(data):
     return (json.dumps(data)+'\0').encode()
+
 
 def msg_decode(message):
     message = bdecode(message).rstrip("\0\x00")
@@ -68,12 +70,12 @@ class PdnsJanitor(object):
         tmpf.close()
 
         try:
-             recursor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-             recursor.bind(fname)
-             recursor.connect(recursor_path)
-             yield recursor
+            recursor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            recursor.bind(fname)
+            recursor.connect(recursor_path)
+            yield recursor
         finally:
-             os.unlink(fname)
+            os.unlink(fname)
 
     def wipe(self, domain):
         with self.recursor_socket() as recursor:
@@ -102,9 +104,9 @@ class PdnsJanitor(object):
                 continue
             change_len = len(change)
             if change_len == 2:
-                # change
-                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
-                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
+                # change examples
+                # [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
+                # [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
                 val = change[1]
                 if len(key) == 9 and \
                    key[0] == "monitor" and \
