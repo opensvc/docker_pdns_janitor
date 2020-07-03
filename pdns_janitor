@@ -178,14 +178,11 @@ class PdnsJanitor(object):
     def init_cluster_data(self):
         with self.lsnr_socket() as lsnr:
             if lsnr is None:
-                print("lsnr socket not ready")
-                time.sleep(1)
-                return
+                raise LsnrReset("lsnr socket not ready")
             lsnr.sendall(msg_encode({"action": "daemon_status"}))
             data = self.recv_messages(lsnr)[0]
             if data is None:
-                print("unable to get initial cluster data")
-                return
+                raise LsnrReset("unable to get initial cluster data")
             self.clustername = data["cluster"]["name"]
             print("clustername: %s" % self.clustername)
 
@@ -199,11 +196,12 @@ class PdnsJanitor(object):
                         raise Exception("lsnr socket not ready")
                     while True:
                         self.mainloop(lsnr)
-            except LsnrReset:
-                time.sleep(1)
+            except LsnrReset as error:
+                print(error)
             except Exception:
                 traceback.print_exc()
-                time.sleep(1)
+            time.sleep(1)
+
 
 if __name__ == "__main__":
     try:
@@ -211,4 +209,3 @@ if __name__ == "__main__":
         o.main()
     except KeyboardInterrupt:
         pass
-
