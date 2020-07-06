@@ -8,12 +8,13 @@ import json
 import socket
 import tempfile
 import contextlib
-import select
 import time
 import traceback
 
+
 class LsnrReset(Exception):
     pass
+
 
 def bdecode(buff):
     """
@@ -27,10 +28,11 @@ def bdecode(buff):
         return buff
     else:
         return buff.decode("utf-8", errors="ignore")
-    return buff
+
 
 def msg_encode(data):
     return (json.dumps(data)+'\0').encode()
+
 
 def msg_decode(message):
     message = bdecode(message).rstrip("\0\x00")
@@ -40,6 +42,10 @@ def msg_decode(message):
 
 
 class PdnsJanitor(object):
+    def __init__(self):
+        self.clustername = None
+        self.last = None
+
     @contextlib.contextmanager
     def lsnr_socket(self):
         if "OPENSVC_LSNR_SOCK" in os.environ:
@@ -48,8 +54,8 @@ class PdnsJanitor(object):
             lsnr_path = "/var/run/lsnr/lsnr.sock"
 
         print("init listener socket")
+        lsnr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            lsnr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             lsnr.settimeout(1)
             lsnr.connect(lsnr_path)
             yield lsnr
@@ -68,12 +74,12 @@ class PdnsJanitor(object):
         tmpf.close()
 
         try:
-             recursor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-             recursor.bind(fname)
-             recursor.connect(recursor_path)
-             yield recursor
+            recursor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            recursor.bind(fname)
+            recursor.connect(recursor_path)
+            yield recursor
         finally:
-             os.unlink(fname)
+            os.unlink(fname)
 
     def wipe(self, domain):
         with self.recursor_socket() as recursor:
@@ -102,10 +108,9 @@ class PdnsJanitor(object):
                 continue
             change_len = len(change)
             if change_len == 2:
-                # change
-                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']
-                # ex: [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']
-                val = change[1]
+                # change examples
+                # [['monitor', 'nodes', 'n1', 'services', 'status', '3.svcdevops-front', 'resources', 'ip#0', 'status'], 'down']  # noqa
+                # [['monitor', 'nodes', 'n1', 'services', 'status', '2.svcdevops-front', 'resources', 'ip#0', 'info', 'ipaddr'], '10.38.0.5']  # noqa
                 if len(key) == 9 and \
                    key[0] == "monitor" and \
                    key[1] == "nodes" and \
@@ -159,7 +164,7 @@ class PdnsJanitor(object):
                 break
             if stream and chunk == b'':
                 # disconnect
-                raise LsnrReset
+                raise LsnrReset('recv stream has no more data (disconnect)')
             if not chunk or chunk == sep:
                 break
             chunks.append(chunk)
@@ -170,6 +175,7 @@ class PdnsJanitor(object):
             data = "".join(chunks)
         if len(data) == 0:
             return []
+        self.last = time.time()
         for message in data.split(sep):
             message = msg_decode(message)
             messages.append(message)
@@ -178,16 +184,22 @@ class PdnsJanitor(object):
     def init_cluster_data(self):
         with self.lsnr_socket() as lsnr:
             if lsnr is None:
-                print("lsnr socket not ready")
-                time.sleep(1)
-                return
+                raise LsnrReset("lsnr socket not ready")
             lsnr.sendall(msg_encode({"action": "daemon_status"}))
             data = self.recv_messages(lsnr)[0]
             if data is None:
-                print("unable to get initial cluster data")
-                return
-            self.clustername = data["cluster"]["name"]
-            print("clustername: %s" % self.clustername)
+                raise LsnrReset("unable to get initial cluster data")
+            try:
+                self.clustername = data["cluster"]["name"]
+                print("clustername: %s" % self.clustername)
+            except KeyError:
+                raise LsnrReset("unable to detect cluster name")
+            try:
+                if data["dns"]["state"] != "running":
+                    raise LsnrReset("dns thread not yet running")
+                print('dns thread running')
+            except KeyError:
+                raise LsnrReset("no dns thread info")
 
     def main(self):
         while True:
@@ -199,11 +211,14 @@ class PdnsJanitor(object):
                         raise Exception("lsnr socket not ready")
                     while True:
                         self.mainloop(lsnr)
-            except LsnrReset:
-                time.sleep(1)
-            except Exception:
+                        if self.last < time.time() - 30:
+                            raise LsnrReset("no event received in the last 30s. reset events socket.")
+            except (LsnrReset, ConnectionRefusedError) as error:
+                print(error)
+            except Exception:  # noqa
                 traceback.print_exc()
-                time.sleep(1)
+            time.sleep(1)
+
 
 if __name__ == "__main__":
     try:
@@ -211,4 +226,3 @@ if __name__ == "__main__":
         o.main()
     except KeyboardInterrupt:
         pass
-
