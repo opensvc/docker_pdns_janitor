@@ -64,35 +64,34 @@ class PdnsJanitor(object):
 
     @contextlib.contextmanager
     def recursor_socket(self):
-        if "OPENSVC_RECURSOR_SOCK" in os.environ:
-            recursor_path = os.environ["OPENSVC_RECURSOR_SOCK"]
-        else:
+        if "OPENSVC_RECURSOR_SOCK" in os.environ:               
+            recursor_path = os.environ["OPENSVC_RECURSOR_SOCK"]           
+        else:                                                             
             recursor_path = "/var/run/pdns_recursor.controlsocket"
-        recursor_dir = os.path.dirname(recursor_path)
-        tmpf = tempfile.NamedTemporaryFile(dir=recursor_dir)
-        fname = tmpf.name
-        tmpf.close()
+        recursor_dir = os.path.dirname(recursor_path)             
+        try:                                                    
+            recursor = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            recursor.connect(recursor_path)                            
+            yield recursor                                             
+        finally:                                                       
+            recursor.close()                                           
 
-        try:
-            recursor = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            recursor.bind(fname)
-            recursor.connect(recursor_path)
-            yield recursor
-        finally:
-            os.unlink(fname)
-
-    def wipe(self, domain):
+    def wipe(self):
+        domain = self.clustername+"$"
         with self.recursor_socket() as recursor:
             msg = "wipe-cache %s" % domain
-            print(msg)
-            msg = (msg+"\n").encode()
+            print(">>> " + msg)
+            msg = (msg).encode()
+            ret = 0
+            length = len(msg)
+            recursor.sendall(ret.to_bytes(4, 'little'))
+            recursor.sendall(length.to_bytes(8, 'little'))
             recursor.sendall(msg)
-            recursor.settimeout(0.2)
-            try:
-                data = recursor.recv(512)
-                print(data.decode())
-            except socket.timeout:
-                print("no response from recursor")
+            recursor.settimeout(1)
+            b = recursor.recv(4096)
+            ret = int.from_bytes(b[0:4], "little")
+            length = int.from_bytes(b[4:12], "little")
+            print("<<< [%d] %s" % (ret, b[12:12+length].decode()))
 
     def event_router(self, data):
         if data is None:
@@ -146,7 +145,7 @@ class PdnsJanitor(object):
                     print("delete", key[2], "instance", svcname)
                     wipe = True
         if wipe:
-            self.wipe(self.clustername+"$")
+            self.wipe()
 
     def mainloop(self, lsnr):
         messages = self.recv_messages(lsnr, stream=True)
@@ -205,6 +204,7 @@ class PdnsJanitor(object):
         while True:
             try:
                 self.init_cluster_data()
+                #self.wipe()
                 with self.lsnr_socket() as lsnr:
                     lsnr.sendall(msg_encode({"action": "events"}))
                     if lsnr is None:
@@ -226,3 +226,4 @@ if __name__ == "__main__":
         o.main()
     except KeyboardInterrupt:
         pass
+
