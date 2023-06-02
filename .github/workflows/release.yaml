@@ -15,7 +15,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: pdns_janitor
+  IMAGE_NAME: opensvc/pdns_janitor
 
 jobs:
   build-and-push-image:
